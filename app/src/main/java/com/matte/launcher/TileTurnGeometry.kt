@@ -17,8 +17,7 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.view.View
 import android.view.ViewPropertyAnimator
-import androidx.core.view.doOnLayout
-import androidx.interpolator.view.animation.FastOutSlowInInterpolator
+import android.view.animation.PathInterpolator
 
 /** One geometry for Home, app opening and locking. */
 internal object TileTurnGeometry {
@@ -27,9 +26,12 @@ internal object TileTurnGeometry {
     private const val PERSPECTIVE_MULTIPLIER = 10f
     private const val DEFAULT_DURATION_MS = 280L
 
+    // Material standard-like cubic curve using built-in PathInterpolator (API 21+).
+    private val smoothTurnInterpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+
     /**
      * Prepares 3D pivot and camera depth for [view].
-     * Safe to call before or after layout; defers pivotY until measured if height is 0.
+     * Safe to call before or after layout; updates pivotY once measured if height is 0.
      */
     fun prepare(view: View, screenX: Int, canvasWidth: Int) {
         val desiredPivotX = -screenX.toFloat()
@@ -39,23 +41,40 @@ internal object TileTurnGeometry {
 
         val density = view.resources.displayMetrics.density.coerceAtLeast(1f)
         val baseSpan = if (canvasWidth > 0) canvasWidth.toFloat() else view.width.toFloat()
-        val desiredCameraDistance = (baseSpan.coerceAtLeast(1f)) * PERSPECTIVE_MULTIPLIER * (density / 2f).coerceAtLeast(1f)
+        val desiredCameraDistance =
+            (baseSpan.coerceAtLeast(1f)) * PERSPECTIVE_MULTIPLIER * (density / 2f).coerceAtLeast(1f)
         if (view.cameraDistance != desiredCameraDistance) {
             view.cameraDistance = desiredCameraDistance
         }
 
         if (view.height > 0) {
-            val desiredPivotY = view.height * 0.5f
-            if (view.pivotY != desiredPivotY) {
-                view.pivotY = desiredPivotY
-            }
+            applyCenterPivotY(view)
         } else {
-            view.doOnLayout { v ->
-                val targetY = v.height * 0.5f
-                if (v.pivotY != targetY) {
-                    v.pivotY = targetY
+            view.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
+                override fun onLayoutChange(
+                    v: View,
+                    left: Int,
+                    top: Int,
+                    right: Int,
+                    bottom: Int,
+                    oldLeft: Int,
+                    oldTop: Int,
+                    oldRight: Int,
+                    oldBottom: Int
+                ) {
+                    if (v.height > 0) {
+                        v.removeOnLayoutChangeListener(this)
+                        applyCenterPivotY(v)
+                    }
                 }
-            }
+            })
+        }
+    }
+
+    private fun applyCenterPivotY(view: View) {
+        val desiredPivotY = view.height * 0.5f
+        if (view.pivotY != desiredPivotY) {
+            view.pivotY = desiredPivotY
         }
     }
 
@@ -74,7 +93,6 @@ internal object TileTurnGeometry {
         view.animate().cancel()
         prepare(view, screenX, canvasWidth)
 
-        // Promote to a hardware layer only while rotating to avoid per-frame texture upload overhead.
         if (view.isAttachedToWindow) {
             view.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
@@ -83,7 +101,7 @@ internal object TileTurnGeometry {
             .rotationY(targetRotationY)
             .setDuration(durationMs)
             .setStartDelay(startDelayMs)
-            .setInterpolator(FastOutSlowInInterpolator())
+            .setInterpolator(smoothTurnInterpolator)
             .withLayer()
             .setListener(object : AnimatorListenerAdapter() {
                 private var finishedCleanly = false
